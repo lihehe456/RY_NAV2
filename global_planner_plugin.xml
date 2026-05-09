@@ -1,0 +1,20 @@
+<library path="nav2_route_polyline_planner">
+  <class
+    name="nav2_route_polyline_planner/RouteClearancePlanner"
+    type="nav2_route_polyline_planner::RouteClearancePlanner"
+    base_class_type="nav2_core::GlobalPlanner">
+    <description>NavToPose planner that prefers straight paths while keeping adaptive clearance from global costmap obstacles.</description>
+  </class>
+  <class
+    name="nav2_route_polyline_planner/RoutePolylinePlanner"
+    type="nav2_route_polyline_planner::RoutePolylinePlanner"
+    base_class_type="nav2_core::GlobalPlanner">
+    <description>Route-priority planner with direct-segment preference and corridor-bounded NavFn fallback.</description>
+  </class>
+  <class
+    name="nav2_route_polyline_planner/RouteSparseCurvePlanner"
+    type="nav2_route_polyline_planner::RouteSparseCurvePlanner"
+    base_class_type="nav2_core::GlobalPlanner">
+    <description>Sparse waypoint planner that uses endpoint orientations to choose between direct lines and smooth Hermite curves with curve-bounded NavFn fallback.</description>
+  </class>
+</library>
