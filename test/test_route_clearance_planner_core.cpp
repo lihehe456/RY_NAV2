@@ -86,12 +86,15 @@ TEST(RouteClearancePlannerCoreTest, FreeSpaceReturnsNearlyStraightPath)
 {
   auto costmap = makeCostmap();
   nav2_route_polyline_planner::RouteClearancePlannerConfig config;
+  EXPECT_FALSE(config.debug_timing);
+  config.debug_timing = true;
   config.path_interpolation_resolution = 0.2;
   nav2_route_polyline_planner::RouteClearancePlannerCore planner(config);
 
   const auto result = planner.createPlan(
     costmap, makePose(0.25, 0.25), makePose(2.45, 0.25, 1.57), "map");
 
+  EXPECT_GT(result.timing.total_ms, 0.0);
   EXPECT_FALSE(result.adjusted_goal);
   ASSERT_GT(result.path.poses.size(), 2U);
   EXPECT_NEAR(result.path.poses.front().pose.position.x, 0.25, 0.11);
@@ -232,6 +235,7 @@ TEST(RouteClearancePlannerCoreTest, ReferenceCorridorCanExpandWhenStraightTubeFa
   config.hard_min_clearance = 0.20;
   config.soft_target_clearance = 0.50;
   config.reference_corridor_half_width = 0.8;
+  config.reference_search_margin = 0.3;
   config.path_interpolation_resolution = 0.1;
   nav2_route_polyline_planner::RouteClearancePlannerCore planner(config);
 

@@ -38,12 +38,27 @@ struct RouteClearancePlannerConfig
   double turn_weight{0.15};
   double goal_search_radius{1.0};
   double reference_corridor_half_width{2.0};
+  double reference_search_margin{0.0};
   bool reference_use_astar{true};
   bool reference_allow_unknown{false};
   double start_goal_keepout_radius{0.35};
   int max_goal_candidates{80};
   double path_interpolation_resolution{0.0};
   bool use_final_goal_orientation{true};
+  bool debug_timing{false};
+};
+
+struct RouteClearanceTiming
+{
+  double global_clearance_ms{0.0};
+  double direct_segment_check_ms{0.0};
+  double reference_path_ms{0.0};
+  double planning_context_ms{0.0};
+  double local_clearance_ms{0.0};
+  double optimize_path_ms{0.0};
+  double goal_candidates_ms{0.0};
+  double adjusted_goal_scan_ms{0.0};
+  double total_ms{0.0};
 };
 
 struct RouteClearancePlanResult
@@ -51,6 +66,7 @@ struct RouteClearancePlanResult
   nav_msgs::msg::Path path;
   bool adjusted_goal{false};
   geometry_msgs::msg::PoseStamped effective_goal;
+  RouteClearanceTiming timing;
 };
 
 class RouteClearancePlannerCore
