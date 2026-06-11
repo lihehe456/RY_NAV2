@@ -86,6 +86,11 @@ bool RouteClearancePlannerCore::isCostTraversable(unsigned char cost) const
   return cost < nav2_costmap_2d::LETHAL_OBSTACLE;
 }
 
+ClearanceCacheStats RouteClearancePlannerCore::clearanceCacheStats() const
+{
+  return clearance_cache_stats_;
+}
+
 double RouteClearancePlannerCore::resolveInterpolationResolution(
   const nav2_costmap_2d::Costmap2D & costmap) const
 {
@@ -178,6 +183,74 @@ std::vector<double> RouteClearancePlannerCore::buildClearanceMap(
     }
   }
   return distance_cells;
+}
+
+RouteClearancePlannerCore::ClearanceCacheKey
+RouteClearancePlannerCore::makeClearanceCacheKey(
+  const nav2_costmap_2d::Costmap2D & costmap) const
+{
+  ClearanceCacheKey key;
+  key.size_x = costmap.getSizeInCellsX();
+  key.size_y = costmap.getSizeInCellsY();
+  key.resolution = costmap.getResolution();
+  key.origin_x = costmap.getOriginX();
+  key.origin_y = costmap.getOriginY();
+  key.allow_unknown = config_.allow_unknown;
+  key.hard_min_clearance = config_.hard_min_clearance;
+  key.soft_target_clearance = config_.soft_target_clearance;
+
+  const size_t size =
+    static_cast<size_t>(key.size_x) * static_cast<size_t>(key.size_y);
+  const unsigned char * char_map = costmap.getCharMap();
+  size_t hash = 1469598103934665603ULL;
+  for (size_t index = 0; index < size; ++index) {
+    hash ^= static_cast<size_t>(char_map[index]);
+    hash *= 1099511628211ULL;
+  }
+  key.hash = hash;
+  return key;
+}
+
+bool RouteClearancePlannerCore::sameClearanceCacheKey(
+  const ClearanceCacheKey & lhs,
+  const ClearanceCacheKey & rhs) const
+{
+  return lhs.size_x == rhs.size_x &&
+         lhs.size_y == rhs.size_y &&
+         std::abs(lhs.resolution - rhs.resolution) <= kEpsilon &&
+         std::abs(lhs.origin_x - rhs.origin_x) <= kEpsilon &&
+         std::abs(lhs.origin_y - rhs.origin_y) <= kEpsilon &&
+         lhs.allow_unknown == rhs.allow_unknown &&
+         std::abs(lhs.hard_min_clearance - rhs.hard_min_clearance) <= kEpsilon &&
+         std::abs(lhs.soft_target_clearance - rhs.soft_target_clearance) <= kEpsilon &&
+         lhs.hash == rhs.hash;
+}
+
+const std::vector<double> & RouteClearancePlannerCore::getGlobalClearanceMap(
+  const nav2_costmap_2d::Costmap2D & costmap,
+  double & lookup_ms) const
+{
+  using SteadyClock = std::chrono::steady_clock;
+  const auto lookup_start = SteadyClock::now();
+  auto elapsed_ms = [](const SteadyClock::time_point & begin) -> double {
+      return std::chrono::duration<double, std::milli>(SteadyClock::now() - begin).count();
+    };
+
+  const auto key = makeClearanceCacheKey(costmap);
+  if (clearance_cache_.valid && sameClearanceCacheKey(clearance_cache_.key, key)) {
+    ++clearance_cache_stats_.hits;
+    lookup_ms = elapsed_ms(lookup_start);
+    return clearance_cache_.map;
+  }
+
+  const auto build_start = SteadyClock::now();
+  clearance_cache_.map = buildClearanceMap(costmap);
+  clearance_cache_.key = key;
+  clearance_cache_.valid = true;
+  ++clearance_cache_stats_.builds;
+  clearance_cache_stats_.last_build_ms = elapsed_ms(build_start);
+  lookup_ms = elapsed_ms(lookup_start);
+  return clearance_cache_.map;
 }
 
 double RouteClearancePlannerCore::clearanceAt(
@@ -1416,9 +1489,10 @@ RouteClearancePlanResult RouteClearancePlannerCore::createPlan(
   worldToMapChecked(costmap, start, start_mx, start_my, "start");
   worldToMapChecked(costmap, goal, goal_mx, goal_my, "goal");
 
+  double global_clearance_lookup_ms = 0.0;
+  const auto & clearance_map = getGlobalClearanceMap(costmap, global_clearance_lookup_ms);
+  timing.global_clearance_ms += global_clearance_lookup_ms;
   auto stage_start = SteadyClock::now();
-  const auto clearance_map = buildClearanceMap(costmap);
-  timing.global_clearance_ms += elapsed_ms(stage_start);
   if (!isCellTraversable(costmap, clearance_map, start_mx, start_my)) {
     throw nav2_core::PlannerException("route clearance planner start pose is not traversable");
   }

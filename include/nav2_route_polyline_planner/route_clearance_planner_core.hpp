@@ -69,6 +69,13 @@ struct RouteClearancePlanResult
   RouteClearanceTiming timing;
 };
 
+struct ClearanceCacheStats
+{
+  size_t builds{0};
+  size_t hits{0};
+  double last_build_ms{0.0};
+};
+
 class RouteClearancePlannerCore
 {
 public:
@@ -85,6 +92,8 @@ public:
     const nav2_costmap_2d::Costmap2D & costmap,
     double wx,
     double wy) const;
+
+  ClearanceCacheStats clearanceCacheStats() const;
 
 private:
   struct GridCell
@@ -107,6 +116,26 @@ private:
     std::vector<std::pair<double, double>> reference_points;
   };
 
+  struct ClearanceCacheKey
+  {
+    unsigned int size_x{0};
+    unsigned int size_y{0};
+    double resolution{0.0};
+    double origin_x{0.0};
+    double origin_y{0.0};
+    bool allow_unknown{false};
+    double hard_min_clearance{0.0};
+    double soft_target_clearance{0.0};
+    size_t hash{0};
+  };
+
+  struct ClearanceCache
+  {
+    bool valid{false};
+    ClearanceCacheKey key;
+    std::vector<double> map;
+  };
+
   bool isCostTraversable(unsigned char cost) const;
 
   bool isCellTraversable(
@@ -117,6 +146,17 @@ private:
 
   std::vector<double> buildClearanceMap(
     const nav2_costmap_2d::Costmap2D & costmap) const;
+
+  const std::vector<double> & getGlobalClearanceMap(
+    const nav2_costmap_2d::Costmap2D & costmap,
+    double & lookup_ms) const;
+
+  ClearanceCacheKey makeClearanceCacheKey(
+    const nav2_costmap_2d::Costmap2D & costmap) const;
+
+  bool sameClearanceCacheKey(
+    const ClearanceCacheKey & lhs,
+    const ClearanceCacheKey & rhs) const;
 
   std::vector<GridCell> buildGoalCandidates(
     const nav2_costmap_2d::Costmap2D & costmap,
@@ -215,6 +255,8 @@ private:
     const std::string & frame_id) const;
 
   RouteClearancePlannerConfig config_;
+  mutable ClearanceCache clearance_cache_;
+  mutable ClearanceCacheStats clearance_cache_stats_;
 };
 
 }  // namespace nav2_route_polyline_planner

@@ -379,3 +379,31 @@ TEST(RouteClearancePlannerCoreTest, IntermediateOrientationsFollowPathTangent)
     EXPECT_NEAR(normalizeAngle(actual_yaw - expected_yaw), 0.0, 1.0e-5);
   }
 }
+
+TEST(RouteClearancePlannerCoreTest, ReusesGlobalClearanceMapUntilCostmapChanges)
+{
+  auto costmap = makeCostmap(60, 30, 0.1);
+
+  nav2_route_polyline_planner::RouteClearancePlannerConfig config;
+  config.debug_timing = true;
+  config.hard_min_clearance = 0.20;
+  config.soft_target_clearance = 0.50;
+  config.path_interpolation_resolution = 0.2;
+  nav2_route_polyline_planner::RouteClearancePlannerCore planner(config);
+
+  planner.createPlan(costmap, makePose(0.35, 1.45), makePose(2.55, 1.45), "map");
+  const auto first_stats = planner.clearanceCacheStats();
+  EXPECT_EQ(first_stats.builds, 1U);
+  EXPECT_EQ(first_stats.hits, 0U);
+
+  planner.createPlan(costmap, makePose(2.55, 1.45), makePose(5.35, 1.45), "map");
+  const auto second_stats = planner.clearanceCacheStats();
+  EXPECT_EQ(second_stats.builds, 1U);
+  EXPECT_EQ(second_stats.hits, 1U);
+
+  costmap.setCost(30, 15, nav2_costmap_2d::LETHAL_OBSTACLE);
+  planner.createPlan(costmap, makePose(0.35, 0.55), makePose(2.55, 0.55), "map");
+  const auto changed_stats = planner.clearanceCacheStats();
+  EXPECT_EQ(changed_stats.builds, 2U);
+  EXPECT_EQ(changed_stats.hits, 1U);
+}
