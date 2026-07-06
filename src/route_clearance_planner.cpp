@@ -72,11 +72,23 @@ void RouteClearancePlanner::configure(
   declare_parameter_if_not_declared(
     node, name_ + ".turn_weight", rclcpp::ParameterValue(0.15));
   declare_parameter_if_not_declared(
+    node, name_ + ".lateral_change_weight", rclcpp::ParameterValue(1.5));
+  declare_parameter_if_not_declared(
+    node, name_ + ".lateral_smoothing_passes", rclcpp::ParameterValue(0));
+  declare_parameter_if_not_declared(
+    node, name_ + ".right_side_bias", rclcpp::ParameterValue(false));
+  declare_parameter_if_not_declared(
+    node, name_ + ".right_side_weight", rclcpp::ParameterValue(0.0));
+  declare_parameter_if_not_declared(
+    node, name_ + ".right_side_target_clearance", rclcpp::ParameterValue(0.70));
+  declare_parameter_if_not_declared(
+    node, name_ + ".right_side_probe_distance", rclcpp::ParameterValue(2.0));
+  declare_parameter_if_not_declared(
+    node, name_ + ".right_side_max_offset", rclcpp::ParameterValue(0.8));
+  declare_parameter_if_not_declared(
     node, name_ + ".goal_search_radius", rclcpp::ParameterValue(1.0));
   declare_parameter_if_not_declared(
     node, name_ + ".reference_corridor_half_width", rclcpp::ParameterValue(2.0));
-  declare_parameter_if_not_declared(
-    node, name_ + ".reference_search_margin", rclcpp::ParameterValue(0.0));
   declare_parameter_if_not_declared(
     node, name_ + ".reference_use_astar", rclcpp::ParameterValue(true));
   declare_parameter_if_not_declared(
@@ -89,8 +101,6 @@ void RouteClearancePlanner::configure(
     node, name_ + ".path_interpolation_resolution", rclcpp::ParameterValue(0.0));
   declare_parameter_if_not_declared(
     node, name_ + ".use_final_goal_orientation", rclcpp::ParameterValue(true));
-  declare_parameter_if_not_declared(
-    node, name_ + ".debug_timing", rclcpp::ParameterValue(false));
 
   RouteClearancePlannerConfig config;
   node->get_parameter(name_ + ".allow_unknown", config.allow_unknown);
@@ -100,13 +110,21 @@ void RouteClearancePlanner::configure(
   node->get_parameter(name_ + ".centerline_weight", config.centerline_weight);
   node->get_parameter(name_ + ".cost_weight", config.cost_weight);
   node->get_parameter(name_ + ".turn_weight", config.turn_weight);
+  node->get_parameter(name_ + ".lateral_change_weight", config.lateral_change_weight);
+  node->get_parameter(name_ + ".lateral_smoothing_passes", config.lateral_smoothing_passes);
+  node->get_parameter(name_ + ".right_side_bias", config.right_side_bias);
+  node->get_parameter(name_ + ".right_side_weight", config.right_side_weight);
+  node->get_parameter(
+    name_ + ".right_side_target_clearance",
+    config.right_side_target_clearance);
+  node->get_parameter(
+    name_ + ".right_side_probe_distance",
+    config.right_side_probe_distance);
+  node->get_parameter(name_ + ".right_side_max_offset", config.right_side_max_offset);
   node->get_parameter(name_ + ".goal_search_radius", config.goal_search_radius);
   node->get_parameter(
     name_ + ".reference_corridor_half_width",
     config.reference_corridor_half_width);
-  node->get_parameter(
-    name_ + ".reference_search_margin",
-    config.reference_search_margin);
   node->get_parameter(name_ + ".reference_use_astar", config.reference_use_astar);
   node->get_parameter(
     name_ + ".reference_allow_unknown",
@@ -121,7 +139,6 @@ void RouteClearancePlanner::configure(
   node->get_parameter(
     name_ + ".use_final_goal_orientation",
     config.use_final_goal_orientation);
-  node->get_parameter(name_ + ".debug_timing", config.debug_timing);
 
   core_ = std::make_unique<RouteClearancePlannerCore>(config);
   RCLCPP_INFO(
@@ -180,24 +197,6 @@ nav_msgs::msg::Path RouteClearancePlanner::createPlan(
   result.path.header.frame_id = global_frame_;
   for (auto & pose : result.path.poses) {
     pose.header = result.path.header;
-  }
-  if (result.timing.total_ms > 0.0) {
-    RCLCPP_INFO(
-      logger_,
-      "RouteClearance timing total=%.1fms global_clearance=%.1f direct_check=%.1f "
-      "reference=%.1f context=%.1f local_clearance=%.1f optimize=%.1f "
-      "goal_candidates=%.1f adjusted_goal_scan=%.1f poses=%zu adjusted_goal=%s",
-      result.timing.total_ms,
-      result.timing.global_clearance_ms,
-      result.timing.direct_segment_check_ms,
-      result.timing.reference_path_ms,
-      result.timing.planning_context_ms,
-      result.timing.local_clearance_ms,
-      result.timing.optimize_path_ms,
-      result.timing.goal_candidates_ms,
-      result.timing.adjusted_goal_scan_ms,
-      result.path.poses.size(),
-      result.adjusted_goal ? "true" : "false");
   }
   return result.path;
 }

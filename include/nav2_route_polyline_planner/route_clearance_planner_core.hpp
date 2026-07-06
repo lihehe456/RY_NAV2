@@ -36,29 +36,21 @@ struct RouteClearancePlannerConfig
   double centerline_weight{0.0};
   double cost_weight{1.0};
   double turn_weight{0.15};
+  double lateral_change_weight{1.5};
+  int lateral_smoothing_passes{0};
+  bool right_side_bias{false};
+  double right_side_weight{0.0};
+  double right_side_target_clearance{0.70};
+  double right_side_probe_distance{2.0};
+  double right_side_max_offset{0.8};
   double goal_search_radius{1.0};
   double reference_corridor_half_width{2.0};
-  double reference_search_margin{0.0};
   bool reference_use_astar{true};
   bool reference_allow_unknown{false};
   double start_goal_keepout_radius{0.35};
   int max_goal_candidates{80};
   double path_interpolation_resolution{0.0};
   bool use_final_goal_orientation{true};
-  bool debug_timing{false};
-};
-
-struct RouteClearanceTiming
-{
-  double global_clearance_ms{0.0};
-  double direct_segment_check_ms{0.0};
-  double reference_path_ms{0.0};
-  double planning_context_ms{0.0};
-  double local_clearance_ms{0.0};
-  double optimize_path_ms{0.0};
-  double goal_candidates_ms{0.0};
-  double adjusted_goal_scan_ms{0.0};
-  double total_ms{0.0};
 };
 
 struct RouteClearancePlanResult
@@ -66,14 +58,6 @@ struct RouteClearancePlanResult
   nav_msgs::msg::Path path;
   bool adjusted_goal{false};
   geometry_msgs::msg::PoseStamped effective_goal;
-  RouteClearanceTiming timing;
-};
-
-struct ClearanceCacheStats
-{
-  size_t builds{0};
-  size_t hits{0};
-  double last_build_ms{0.0};
 };
 
 class RouteClearancePlannerCore
@@ -92,8 +76,6 @@ public:
     const nav2_costmap_2d::Costmap2D & costmap,
     double wx,
     double wy) const;
-
-  ClearanceCacheStats clearanceCacheStats() const;
 
 private:
   struct GridCell
@@ -116,26 +98,6 @@ private:
     std::vector<std::pair<double, double>> reference_points;
   };
 
-  struct ClearanceCacheKey
-  {
-    unsigned int size_x{0};
-    unsigned int size_y{0};
-    double resolution{0.0};
-    double origin_x{0.0};
-    double origin_y{0.0};
-    bool allow_unknown{false};
-    double hard_min_clearance{0.0};
-    double soft_target_clearance{0.0};
-    size_t hash{0};
-  };
-
-  struct ClearanceCache
-  {
-    bool valid{false};
-    ClearanceCacheKey key;
-    std::vector<double> map;
-  };
-
   bool isCostTraversable(unsigned char cost) const;
 
   bool isCellTraversable(
@@ -146,17 +108,6 @@ private:
 
   std::vector<double> buildClearanceMap(
     const nav2_costmap_2d::Costmap2D & costmap) const;
-
-  const std::vector<double> & getGlobalClearanceMap(
-    const nav2_costmap_2d::Costmap2D & costmap,
-    double & lookup_ms) const;
-
-  ClearanceCacheKey makeClearanceCacheKey(
-    const nav2_costmap_2d::Costmap2D & costmap) const;
-
-  bool sameClearanceCacheKey(
-    const ClearanceCacheKey & lhs,
-    const ClearanceCacheKey & rhs) const;
 
   std::vector<GridCell> buildGoalCandidates(
     const nav2_costmap_2d::Costmap2D & costmap,
@@ -255,8 +206,6 @@ private:
     const std::string & frame_id) const;
 
   RouteClearancePlannerConfig config_;
-  mutable ClearanceCache clearance_cache_;
-  mutable ClearanceCacheStats clearance_cache_stats_;
 };
 
 }  // namespace nav2_route_polyline_planner

@@ -15,7 +15,6 @@
 #include "nav2_route_polyline_planner/route_clearance_planner_core.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -86,11 +85,6 @@ bool RouteClearancePlannerCore::isCostTraversable(unsigned char cost) const
   return cost < nav2_costmap_2d::LETHAL_OBSTACLE;
 }
 
-ClearanceCacheStats RouteClearancePlannerCore::clearanceCacheStats() const
-{
-  return clearance_cache_stats_;
-}
-
 double RouteClearancePlannerCore::resolveInterpolationResolution(
   const nav2_costmap_2d::Costmap2D & costmap) const
 {
@@ -119,20 +113,12 @@ std::vector<double> RouteClearancePlannerCore::buildClearanceMap(
   const unsigned int size_y = costmap.getSizeInCellsY();
   const size_t size = static_cast<size_t>(size_x) * static_cast<size_t>(size_y);
   const double inf = std::numeric_limits<double>::infinity();
-  const double max_clearance_for_cost =
-    std::max(0.0, std::max(config_.hard_min_clearance, config_.soft_target_clearance));
-  const double max_distance_cells =
-    max_clearance_for_cost > kEpsilon ?
-    std::ceil(max_clearance_for_cost / costmap.getResolution()) + std::sqrt(2.0) :
-    0.0;
   std::vector<double> distance_cells(size, inf);
   std::queue<GridCell> queue;
-  const unsigned char * char_map = costmap.getCharMap();
 
   for (unsigned int my = 0; my < size_y; ++my) {
     for (unsigned int mx = 0; mx < size_x; ++mx) {
-      const unsigned char cost =
-        char_map[static_cast<size_t>(cellIndex(mx, my, size_x))];
+      const unsigned char cost = costmap.getCost(mx, my);
       const bool obstacle =
         cost == nav2_costmap_2d::NO_INFORMATION ? !config_.allow_unknown :
         cost >= nav2_costmap_2d::LETHAL_OBSTACLE;
@@ -163,9 +149,6 @@ std::vector<double> RouteClearancePlannerCore::buildClearanceMap(
       }
       const double step = neighbor < 4 ? 1.0 : std::sqrt(2.0);
       const double next_distance = current_distance + step;
-      if (max_distance_cells > kEpsilon && next_distance > max_distance_cells) {
-        continue;
-      }
       const int next_index = cellIndex(
         static_cast<unsigned int>(nx),
         static_cast<unsigned int>(ny),
@@ -183,74 +166,6 @@ std::vector<double> RouteClearancePlannerCore::buildClearanceMap(
     }
   }
   return distance_cells;
-}
-
-RouteClearancePlannerCore::ClearanceCacheKey
-RouteClearancePlannerCore::makeClearanceCacheKey(
-  const nav2_costmap_2d::Costmap2D & costmap) const
-{
-  ClearanceCacheKey key;
-  key.size_x = costmap.getSizeInCellsX();
-  key.size_y = costmap.getSizeInCellsY();
-  key.resolution = costmap.getResolution();
-  key.origin_x = costmap.getOriginX();
-  key.origin_y = costmap.getOriginY();
-  key.allow_unknown = config_.allow_unknown;
-  key.hard_min_clearance = config_.hard_min_clearance;
-  key.soft_target_clearance = config_.soft_target_clearance;
-
-  const size_t size =
-    static_cast<size_t>(key.size_x) * static_cast<size_t>(key.size_y);
-  const unsigned char * char_map = costmap.getCharMap();
-  size_t hash = 1469598103934665603ULL;
-  for (size_t index = 0; index < size; ++index) {
-    hash ^= static_cast<size_t>(char_map[index]);
-    hash *= 1099511628211ULL;
-  }
-  key.hash = hash;
-  return key;
-}
-
-bool RouteClearancePlannerCore::sameClearanceCacheKey(
-  const ClearanceCacheKey & lhs,
-  const ClearanceCacheKey & rhs) const
-{
-  return lhs.size_x == rhs.size_x &&
-         lhs.size_y == rhs.size_y &&
-         std::abs(lhs.resolution - rhs.resolution) <= kEpsilon &&
-         std::abs(lhs.origin_x - rhs.origin_x) <= kEpsilon &&
-         std::abs(lhs.origin_y - rhs.origin_y) <= kEpsilon &&
-         lhs.allow_unknown == rhs.allow_unknown &&
-         std::abs(lhs.hard_min_clearance - rhs.hard_min_clearance) <= kEpsilon &&
-         std::abs(lhs.soft_target_clearance - rhs.soft_target_clearance) <= kEpsilon &&
-         lhs.hash == rhs.hash;
-}
-
-const std::vector<double> & RouteClearancePlannerCore::getGlobalClearanceMap(
-  const nav2_costmap_2d::Costmap2D & costmap,
-  double & lookup_ms) const
-{
-  using SteadyClock = std::chrono::steady_clock;
-  const auto lookup_start = SteadyClock::now();
-  auto elapsed_ms = [](const SteadyClock::time_point & begin) -> double {
-      return std::chrono::duration<double, std::milli>(SteadyClock::now() - begin).count();
-    };
-
-  const auto key = makeClearanceCacheKey(costmap);
-  if (clearance_cache_.valid && sameClearanceCacheKey(clearance_cache_.key, key)) {
-    ++clearance_cache_stats_.hits;
-    lookup_ms = elapsed_ms(lookup_start);
-    return clearance_cache_.map;
-  }
-
-  const auto build_start = SteadyClock::now();
-  clearance_cache_.map = buildClearanceMap(costmap);
-  clearance_cache_.key = key;
-  clearance_cache_.valid = true;
-  ++clearance_cache_stats_.builds;
-  clearance_cache_stats_.last_build_ms = elapsed_ms(build_start);
-  lookup_ms = elapsed_ms(lookup_start);
-  return clearance_cache_.map;
 }
 
 double RouteClearancePlannerCore::clearanceAt(
@@ -382,156 +297,79 @@ std::vector<std::pair<double, double>> RouteClearancePlannerCore::buildReference
     throw nav2_core::PlannerException("route clearance planner goal pose is outside costmap");
   }
 
-  auto clamp_to_index = [](int value, unsigned int limit) -> unsigned int {
-      if (value < 0) {
-        return 0U;
+  nav2_navfn_planner::NavFn planner(
+    static_cast<int>(costmap.getSizeInCellsX()),
+    static_cast<int>(costmap.getSizeInCellsY()));
+  std::vector<unsigned char> reference_costmap_data(
+    costmap.getCharMap(),
+    costmap.getCharMap() +
+    static_cast<size_t>(costmap.getSizeInCellsX()) *
+    static_cast<size_t>(costmap.getSizeInCellsY()));
+  for (unsigned int my = 0; my < costmap.getSizeInCellsY(); ++my) {
+    for (unsigned int mx = 0; mx < costmap.getSizeInCellsX(); ++mx) {
+      if (!isCellTraversable(costmap, clearance_map, mx, my)) {
+        reference_costmap_data[costmap.getIndex(mx, my)] =
+          nav2_costmap_2d::LETHAL_OBSTACLE;
       }
-      const unsigned int cast = static_cast<unsigned int>(value);
-      return std::min(limit - 1U, cast);
-    };
-
-  auto run_navfn =
-    [&](unsigned int min_mx,
-      unsigned int min_my,
-      unsigned int max_mx,
-      unsigned int max_my,
-      std::vector<std::pair<double, double>> & points) -> bool
-    {
-      const unsigned int width = max_mx - min_mx + 1U;
-      const unsigned int height = max_my - min_my + 1U;
-      nav2_navfn_planner::NavFn planner(
-        static_cast<int>(width),
-        static_cast<int>(height));
-      std::vector<unsigned char> reference_costmap_data(
-        static_cast<size_t>(width) * static_cast<size_t>(height),
-        nav2_costmap_2d::FREE_SPACE);
-      for (unsigned int local_my = 0; local_my < height; ++local_my) {
-        for (unsigned int local_mx = 0; local_mx < width; ++local_mx) {
-          const unsigned int source_mx = min_mx + local_mx;
-          const unsigned int source_my = min_my + local_my;
-          const size_t local_index =
-            static_cast<size_t>(local_my) * static_cast<size_t>(width) + local_mx;
-          reference_costmap_data[local_index] = costmap.getCharMap()[
-            static_cast<size_t>(costmap.getIndex(source_mx, source_my))];
-          if (!isCellTraversable(costmap, clearance_map, source_mx, source_my)) {
-            reference_costmap_data[local_index] = nav2_costmap_2d::LETHAL_OBSTACLE;
-          }
-        }
-      }
-      const unsigned int local_start_mx = start_mx - min_mx;
-      const unsigned int local_start_my = start_my - min_my;
-      const unsigned int local_goal_mx = goal_mx - min_mx;
-      const unsigned int local_goal_my = goal_my - min_my;
-      reference_costmap_data[
-        static_cast<size_t>(local_start_my) * static_cast<size_t>(width) +
-        local_start_mx] = nav2_costmap_2d::FREE_SPACE;
-      reference_costmap_data[
-        static_cast<size_t>(local_goal_my) * static_cast<size_t>(width) +
-        local_goal_mx] = nav2_costmap_2d::FREE_SPACE;
-
-      planner.setCostmap(
-        reference_costmap_data.data(),
-        true,
-        config_.reference_allow_unknown);
-
-      int map_start[2] = {
-        static_cast<int>(local_start_mx),
-        static_cast<int>(local_start_my)};
-      int map_goal[2] = {
-        static_cast<int>(local_goal_mx),
-        static_cast<int>(local_goal_my)};
-      planner.setStart(map_goal);
-      planner.setGoal(map_start);
-      if (config_.reference_use_astar) {
-        planner.calcNavFnAstar();
-      } else {
-        planner.calcNavFnDijkstra(true);
-      }
-
-      const unsigned int goal_index =
-        local_goal_my * static_cast<unsigned int>(planner.nx) + local_goal_mx;
-      if (planner.potarr[goal_index] >= POT_HIGH) {
-        return false;
-      }
-
-      planner.setStart(map_goal);
-      const int max_cycles =
-        static_cast<int>(std::max(width, height) * 4U);
-      if (planner.calcPath(max_cycles) == 0 || planner.getPathLen() == 0) {
-        return false;
-      }
-
-      float * path_x = planner.getPathX();
-      float * path_y = planner.getPathY();
-      const int path_length = planner.getPathLen();
-      const double min_distance = std::max(costmap.getResolution() * 2.0, 0.25);
-
-      points.clear();
-      appendUniquePoint(
-        points,
-        {start.pose.position.x, start.pose.position.y},
-        min_distance);
-
-      for (int index = path_length - 1; index >= 0; --index) {
-        const double wx =
-          costmap.getOriginX() +
-          static_cast<double>(min_mx + path_x[index]) * costmap.getResolution();
-        const double wy =
-          costmap.getOriginY() +
-          static_cast<double>(min_my + path_y[index]) * costmap.getResolution();
-        appendUniquePoint(points, {wx, wy}, min_distance);
-      }
-
-      const std::pair<double, double> goal_point{
-        goal.pose.position.x, goal.pose.position.y};
-      if (!points.empty() && euclideanDistance(points.back(), goal_point) <= min_distance) {
-        points.back() = goal_point;
-      } else {
-        points.push_back(goal_point);
-      }
-      return true;
-    };
-
-  std::vector<std::pair<double, double>> points;
-  if (config_.reference_search_margin > kEpsilon) {
-    const double search_margin =
-      std::max(config_.reference_search_margin, config_.hard_min_clearance);
-    const int margin_cells = static_cast<int>(std::ceil(search_margin / costmap.getResolution()));
-    const unsigned int local_min_mx = clamp_to_index(
-      static_cast<int>(std::min(start_mx, goal_mx)) - margin_cells,
-      costmap.getSizeInCellsX());
-    const unsigned int local_min_my = clamp_to_index(
-      static_cast<int>(std::min(start_my, goal_my)) - margin_cells,
-      costmap.getSizeInCellsY());
-    const unsigned int local_max_mx = clamp_to_index(
-      static_cast<int>(std::max(start_mx, goal_mx)) + margin_cells,
-      costmap.getSizeInCellsX());
-    const unsigned int local_max_my = clamp_to_index(
-      static_cast<int>(std::max(start_my, goal_my)) + margin_cells,
-      costmap.getSizeInCellsY());
-    const bool local_contains_endpoints =
-      local_min_mx <= start_mx && start_mx <= local_max_mx &&
-      local_min_my <= start_my && start_my <= local_max_my &&
-      local_min_mx <= goal_mx && goal_mx <= local_max_mx &&
-      local_min_my <= goal_my && goal_my <= local_max_my;
-    if (
-      local_contains_endpoints &&
-      run_navfn(local_min_mx, local_min_my, local_max_mx, local_max_my, points))
-    {
-      return points;
     }
   }
+  reference_costmap_data[costmap.getIndex(start_mx, start_my)] = nav2_costmap_2d::FREE_SPACE;
+  reference_costmap_data[costmap.getIndex(goal_mx, goal_my)] = nav2_costmap_2d::FREE_SPACE;
 
-  if (
-    !run_navfn(
-      0U,
-      0U,
-      costmap.getSizeInCellsX() - 1U,
-      costmap.getSizeInCellsY() - 1U,
-      points))
-  {
+  planner.setCostmap(
+    reference_costmap_data.data(),
+    true,
+    config_.reference_allow_unknown);
+
+  int map_start[2] = {static_cast<int>(start_mx), static_cast<int>(start_my)};
+  int map_goal[2] = {static_cast<int>(goal_mx), static_cast<int>(goal_my)};
+  planner.setStart(map_goal);
+  planner.setGoal(map_start);
+  if (config_.reference_use_astar) {
+    planner.calcNavFnAstar();
+  } else {
+    planner.calcNavFnDijkstra(true);
+  }
+
+  const unsigned int goal_index = goal_my * static_cast<unsigned int>(planner.nx) + goal_mx;
+  if (planner.potarr[goal_index] >= POT_HIGH) {
     throw nav2_core::PlannerException(
             "route clearance planner could not find a coarse reference path");
+  }
+
+  planner.setStart(map_goal);
+  const int max_cycles =
+    static_cast<int>(std::max(costmap.getSizeInCellsX(), costmap.getSizeInCellsY()) * 4U);
+  if (planner.calcPath(max_cycles) == 0 || planner.getPathLen() == 0) {
+    throw nav2_core::PlannerException(
+            "route clearance planner coarse reference path extraction failed");
+  }
+
+  float * path_x = planner.getPathX();
+  float * path_y = planner.getPathY();
+  const int path_length = planner.getPathLen();
+  const double min_distance = std::max(costmap.getResolution() * 2.0, 0.25);
+
+  std::vector<std::pair<double, double>> points;
+  appendUniquePoint(
+    points,
+    {start.pose.position.x, start.pose.position.y},
+    min_distance);
+
+  for (int index = path_length - 1; index >= 0; --index) {
+    const double wx = costmap.getOriginX() + static_cast<double>(path_x[index]) *
+      costmap.getResolution();
+    const double wy = costmap.getOriginY() + static_cast<double>(path_y[index]) *
+      costmap.getResolution();
+    appendUniquePoint(points, {wx, wy}, min_distance);
+  }
+
+  const std::pair<double, double> goal_point{
+    goal.pose.position.x, goal.pose.position.y};
+  if (!points.empty() && euclideanDistance(points.back(), goal_point) <= min_distance) {
+    points.back() = goal_point;
+  } else {
+    points.push_back(goal_point);
   }
   return points;
 }
@@ -613,7 +451,7 @@ RouteClearancePlannerCore::PlanningContext RouteClearancePlannerCore::buildPlann
     costmap.getResolution(),
     costmap.getOriginX() + static_cast<double>(min_mx) * costmap.getResolution(),
     costmap.getOriginY() + static_cast<double>(min_my) * costmap.getResolution(),
-    nav2_costmap_2d::LETHAL_OBSTACLE);
+    nav2_costmap_2d::FREE_SPACE);
 
   const std::pair<double, double> start_point{
     start.pose.position.x, start.pose.position.y};
@@ -622,108 +460,25 @@ RouteClearancePlannerCore::PlanningContext RouteClearancePlannerCore::buildPlann
   const double keepout_radius = std::max(0.0, config_.start_goal_keepout_radius);
   const double corridor_half_width = std::max(0.0, config_.reference_corridor_half_width);
 
-  auto copy_source_cost = [&](unsigned int source_mx, unsigned int source_my) {
-      cropped_costmap.setCost(
-        source_mx - min_mx,
-        source_my - min_my,
-        costmap.getCharMap()[costmap.getIndex(source_mx, source_my)]);
-    };
-
-  auto mark_disc = [&](const std::pair<double, double> & center, double radius) {
-      if (radius <= kEpsilon) {
-        unsigned int center_mx = 0;
-        unsigned int center_my = 0;
-        if (costmap.worldToMap(center.first, center.second, center_mx, center_my)) {
-          center_mx = std::min(max_mx, std::max(min_mx, center_mx));
-          center_my = std::min(max_my, std::max(min_my, center_my));
-          copy_source_cost(center_mx, center_my);
-        }
-        return;
+  for (unsigned int my = 0; my < height; ++my) {
+    for (unsigned int mx = 0; mx < width; ++mx) {
+      const unsigned int source_mx = min_mx + mx;
+      const unsigned int source_my = min_my + my;
+      const unsigned int source_index = costmap.getIndex(source_mx, source_my);
+      unsigned char cost = costmap.getCharMap()[source_index];
+      double wx = 0.0;
+      double wy = 0.0;
+      costmap.mapToWorld(source_mx, source_my, wx, wy);
+      const std::pair<double, double> cell_point{wx, wy};
+      const bool within_keepout =
+        euclideanDistance(cell_point, start_point) <= keepout_radius ||
+        euclideanDistance(cell_point, goal_point) <= keepout_radius;
+      const bool within_corridor =
+        pointToPolylineDistance(cell_point, sampled_reference) <= corridor_half_width;
+      if (!within_keepout && !within_corridor) {
+        cost = nav2_costmap_2d::LETHAL_OBSTACLE;
       }
-
-      const unsigned int disc_min_mx = clamp_to_index(
-        static_cast<int>(std::floor((center.first - radius - origin_x) / resolution)),
-        size_x);
-      const unsigned int disc_min_my = clamp_to_index(
-        static_cast<int>(std::floor((center.second - radius - origin_y) / resolution)),
-        size_y);
-      const unsigned int disc_max_mx = clamp_to_index(
-        static_cast<int>(std::ceil((center.first + radius - origin_x) / resolution)),
-        size_x);
-      const unsigned int disc_max_my = clamp_to_index(
-        static_cast<int>(std::ceil((center.second + radius - origin_y) / resolution)),
-        size_y);
-      for (unsigned int source_my = std::max(min_my, disc_min_my);
-        source_my <= std::min(max_my, disc_max_my);
-        ++source_my)
-      {
-        for (unsigned int source_mx = std::max(min_mx, disc_min_mx);
-          source_mx <= std::min(max_mx, disc_max_mx);
-          ++source_mx)
-        {
-          double wx = 0.0;
-          double wy = 0.0;
-          costmap.mapToWorld(source_mx, source_my, wx, wy);
-          if (euclideanDistance({wx, wy}, center) <= radius + kEpsilon) {
-            copy_source_cost(source_mx, source_my);
-          }
-        }
-      }
-    };
-
-  auto mark_segment_corridor =
-    [&](const std::pair<double, double> & segment_start,
-      const std::pair<double, double> & segment_end)
-    {
-      const double min_segment_wx =
-        std::min(segment_start.first, segment_end.first) - corridor_half_width;
-      const double min_segment_wy =
-        std::min(segment_start.second, segment_end.second) - corridor_half_width;
-      const double max_segment_wx =
-        std::max(segment_start.first, segment_end.first) + corridor_half_width;
-      const double max_segment_wy =
-        std::max(segment_start.second, segment_end.second) + corridor_half_width;
-      const unsigned int segment_min_mx = clamp_to_index(
-        static_cast<int>(std::floor((min_segment_wx - origin_x) / resolution)),
-        size_x);
-      const unsigned int segment_min_my = clamp_to_index(
-        static_cast<int>(std::floor((min_segment_wy - origin_y) / resolution)),
-        size_y);
-      const unsigned int segment_max_mx = clamp_to_index(
-        static_cast<int>(std::ceil((max_segment_wx - origin_x) / resolution)),
-        size_x);
-      const unsigned int segment_max_my = clamp_to_index(
-        static_cast<int>(std::ceil((max_segment_wy - origin_y) / resolution)),
-        size_y);
-
-      for (unsigned int source_my = std::max(min_my, segment_min_my);
-        source_my <= std::min(max_my, segment_max_my);
-        ++source_my)
-      {
-        for (unsigned int source_mx = std::max(min_mx, segment_min_mx);
-          source_mx <= std::min(max_mx, segment_max_mx);
-          ++source_mx)
-        {
-          double wx = 0.0;
-          double wy = 0.0;
-          costmap.mapToWorld(source_mx, source_my, wx, wy);
-          if (
-            pointToSegmentDistance({wx, wy}, segment_start, segment_end) <=
-            corridor_half_width + kEpsilon)
-          {
-            copy_source_cost(source_mx, source_my);
-          }
-        }
-      }
-    };
-
-  mark_disc(start_point, keepout_radius);
-  mark_disc(goal_point, keepout_radius);
-  if (sampled_reference.size() == 1U) {
-    mark_disc(sampled_reference.front(), corridor_half_width);
-  } else {
-    for (size_t index = 1; index < sampled_reference.size(); ++index) {
-      mark_segment_corridor(sampled_reference[index - 1], sampled_reference[index]);
+      cropped_costmap.setCost(mx, my, cost);
     }
   }
 
@@ -851,6 +606,111 @@ nav_msgs::msg::Path RouteClearancePlannerCore::buildOptimizedPathFromReference(
       return true;
     };
 
+  auto smooth_points_if_safe =
+    [&](std::vector<std::pair<double, double>> points) -> std::vector<std::pair<double, double>> {
+      const int smoothing_passes = config_.right_side_bias ?
+        std::clamp(config_.lateral_smoothing_passes, 0, 8) : 0;
+      if (smoothing_passes == 0 || points.size() < 4U) {
+        return points;
+      }
+
+      const double smoothing_alpha = 0.35;
+      for (int pass = 0; pass < smoothing_passes; ++pass) {
+        for (size_t index = 1; index + 1 < points.size(); ++index) {
+          const auto & previous = points[index - 1];
+          const auto & current = points[index];
+          const auto & next = points[index + 1];
+          const std::pair<double, double> midpoint{
+            (previous.first + next.first) * 0.5,
+            (previous.second + next.second) * 0.5};
+          const std::pair<double, double> candidate{
+            current.first * (1.0 - smoothing_alpha) + midpoint.first * smoothing_alpha,
+            current.second * (1.0 - smoothing_alpha) + midpoint.second * smoothing_alpha};
+
+          unsigned int mx = 0;
+          unsigned int my = 0;
+          if (!planning_context.costmap.worldToMap(candidate.first, candidate.second, mx, my)) {
+            continue;
+          }
+          if (!isCellTraversable(planning_context.costmap, clearance_map, mx, my)) {
+            continue;
+          }
+          if (!segment_is_valid(previous, candidate) || !segment_is_valid(candidate, next)) {
+            continue;
+          }
+          points[index] = candidate;
+        }
+      }
+      return points;
+    };
+
+  auto right_side_score =
+    [&](const std::pair<double, double> & point,
+      double right_x,
+      double right_y,
+      double right_offset,
+      double lateral_limit_value) -> double
+    {
+      if (!config_.right_side_bias || config_.right_side_weight <= kEpsilon) {
+        return 0.0;
+      }
+
+      const double max_right_offset = std::max(
+        planning_context.costmap.getResolution(),
+        std::min(
+          lateral_limit_value,
+          config_.right_side_max_offset > kEpsilon ?
+          config_.right_side_max_offset : lateral_limit_value));
+      const double target_clearance = std::max(
+        planning_context.costmap.getResolution(),
+        config_.right_side_target_clearance);
+      const double probe_distance = std::max(
+        target_clearance,
+        config_.right_side_probe_distance);
+      const double probe_step = std::max(
+        planning_context.costmap.getResolution(),
+        target_clearance * 0.1);
+
+      bool found_right_boundary = false;
+      double boundary_distance = probe_distance;
+      for (double distance = probe_step; distance <= probe_distance + kEpsilon;
+        distance += probe_step)
+      {
+        unsigned int mx = 0;
+        unsigned int my = 0;
+        const double wx = point.first + right_x * distance;
+        const double wy = point.second + right_y * distance;
+        if (!planning_context.costmap.worldToMap(wx, wy, mx, my) ||
+          !isCostTraversable(planning_context.costmap.getCost(mx, my)))
+        {
+          found_right_boundary = true;
+          boundary_distance = distance;
+          break;
+        }
+      }
+
+      double score = 0.0;
+      const double normalized_offset_error =
+        std::max(0.0, max_right_offset - right_offset) / max_right_offset;
+      if (found_right_boundary) {
+        const double normalized_error =
+          std::abs(boundary_distance - target_clearance) / target_clearance;
+        score += normalized_error * normalized_error;
+        score += normalized_offset_error * normalized_offset_error;
+      } else {
+        score += normalized_offset_error * normalized_offset_error;
+      }
+
+      if (right_offset < 0.0) {
+        score += std::abs(right_offset) / max_right_offset * 2.0;
+      }
+      if (right_offset > max_right_offset) {
+        const double normalized_excess = (right_offset - max_right_offset) / max_right_offset;
+        score += normalized_excess * normalized_excess * 4.0;
+      }
+      return score * config_.right_side_weight;
+    };
+
   optimized_points.reserve(planning_context.reference_points.size() + 2U);
   optimized_points.push_back({start.pose.position.x, start.pose.position.y});
 
@@ -871,7 +731,7 @@ nav_msgs::msg::Path RouteClearancePlannerCore::buildOptimizedPathFromReference(
     const auto & previous = sampled_reference[index - 1];
     const auto & current = sampled_reference[index];
     const auto & next = sampled_reference[index + 1];
-    const std::pair<double, double> next_reference_target =
+    const std::pair<double, double> next_target =
       index + 2 < sampled_reference.size() ?
       sampled_reference[index + 1] :
       std::pair<double, double>{
@@ -888,6 +748,8 @@ nav_msgs::msg::Path RouteClearancePlannerCore::buildOptimizedPathFromReference(
 
     const double normal_x = -tangent_y / tangent_length;
     const double normal_y = tangent_x / tangent_length;
+    const double right_x = -normal_x;
+    const double right_y = -normal_y;
 
     std::pair<double, double> best_point = current;
     double best_score = std::numeric_limits<double>::infinity();
@@ -909,7 +771,7 @@ nav_msgs::msg::Path RouteClearancePlannerCore::buildOptimizedPathFromReference(
       if (!segment_is_valid(optimized_points.back(), {wx, wy})) {
         continue;
       }
-      if (!segment_is_valid({wx, wy}, next_reference_target)) {
+      if (!segment_is_valid({wx, wy}, next_target)) {
         continue;
       }
 
@@ -920,19 +782,20 @@ nav_msgs::msg::Path RouteClearancePlannerCore::buildOptimizedPathFromReference(
       const double clearance_deficit = std::max(0.0, config_.soft_target_clearance - clearance);
       const double lateral_penalty = std::abs(offset);
       const double lateral_change_penalty = std::abs(offset - previous_offset);
+      const double right_offset = -offset;
       const double raw_cost = static_cast<double>(planning_context.costmap.getCost(mx, my));
       const auto & previous_point = optimized_points.back();
       const double incoming_distance = euclideanDistance(previous_point, {wx, wy});
-      const double outgoing_distance = euclideanDistance({wx, wy}, next_reference_target);
-      const double direct_distance = euclideanDistance(previous_point, next_reference_target);
+      const double outgoing_distance = euclideanDistance({wx, wy}, next_target);
+      const double direct_distance = euclideanDistance(previous_point, next_target);
       const double detour_penalty =
         std::max(0.0, incoming_distance + outgoing_distance - direct_distance);
       double turn_angle = 0.0;
       if (incoming_distance > kEpsilon && outgoing_distance > kEpsilon) {
         const double incoming_x = wx - previous_point.first;
         const double incoming_y = wy - previous_point.second;
-        const double outgoing_x = next_reference_target.first - wx;
-        const double outgoing_y = next_reference_target.second - wy;
+        const double outgoing_x = next_target.first - wx;
+        const double outgoing_y = next_target.second - wy;
         const double dot = std::max(
           -1.0,
           std::min(
@@ -944,7 +807,8 @@ nav_msgs::msg::Path RouteClearancePlannerCore::buildOptimizedPathFromReference(
       const double score =
         clearance_deficit * config_.clearance_weight * 10.0 +
         lateral_penalty * 0.5 +
-        lateral_change_penalty * 1.5 +
+        lateral_change_penalty * std::max(0.0, config_.lateral_change_weight) +
+        right_side_score({wx, wy}, right_x, right_y, right_offset, lateral_limit) +
         detour_penalty * 4.0 +
         turn_angle * config_.turn_weight * 15.0 +
         raw_cost * config_.cost_weight / 253.0;
@@ -963,6 +827,8 @@ nav_msgs::msg::Path RouteClearancePlannerCore::buildOptimizedPathFromReference(
     {
       effective_goal.pose.position.x,
       effective_goal.pose.position.y});
+
+  optimized_points = smooth_points_if_safe(optimized_points);
 
   auto optimized_path = build_path_from_points(optimized_points);
   if (path_respects_hard_clearance(optimized_path)) {
@@ -1475,13 +1341,6 @@ RouteClearancePlanResult RouteClearancePlannerCore::createPlan(
   const geometry_msgs::msg::PoseStamped & goal,
   const std::string & frame_id) const
 {
-  using SteadyClock = std::chrono::steady_clock;
-  const auto total_start = SteadyClock::now();
-  auto elapsed_ms = [](const SteadyClock::time_point & begin) -> double {
-      return std::chrono::duration<double, std::milli>(SteadyClock::now() - begin).count();
-    };
-  RouteClearanceTiming timing;
-
   unsigned int start_mx = 0;
   unsigned int start_my = 0;
   unsigned int goal_mx = 0;
@@ -1489,10 +1348,7 @@ RouteClearancePlanResult RouteClearancePlannerCore::createPlan(
   worldToMapChecked(costmap, start, start_mx, start_my, "start");
   worldToMapChecked(costmap, goal, goal_mx, goal_my, "goal");
 
-  double global_clearance_lookup_ms = 0.0;
-  const auto & clearance_map = getGlobalClearanceMap(costmap, global_clearance_lookup_ms);
-  timing.global_clearance_ms += global_clearance_lookup_ms;
-  auto stage_start = SteadyClock::now();
+  const auto clearance_map = buildClearanceMap(costmap);
   if (!isCellTraversable(costmap, clearance_map, start_mx, start_my)) {
     throw nav2_core::PlannerException("route clearance planner start pose is not traversable");
   }
@@ -1503,46 +1359,29 @@ RouteClearancePlanResult RouteClearancePlannerCore::createPlan(
   const GridCell requested_goal_world{goal_mx, goal_my};
   if (isCellTraversable(costmap, clearance_map, goal_mx, goal_my)) {
     std::vector<std::pair<double, double>> reference_points;
-    stage_start = SteadyClock::now();
-    const bool direct_segment_safe = isSegmentClearanceSafe(costmap, clearance_map, start, goal);
-    timing.direct_segment_check_ms += elapsed_ms(stage_start);
-    if (direct_segment_safe) {
+    if (isSegmentClearanceSafe(costmap, clearance_map, start, goal)) {
       reference_points = {
         {start.pose.position.x, start.pose.position.y},
         {goal.pose.position.x, goal.pose.position.y}};
     } else {
-      stage_start = SteadyClock::now();
       reference_points = buildReferencePathPoints(costmap, clearance_map, start, goal);
-      timing.reference_path_ms += elapsed_ms(stage_start);
     }
-    stage_start = SteadyClock::now();
     planning_context = buildPlanningContext(costmap, reference_points, start, goal);
-    timing.planning_context_ms += elapsed_ms(stage_start);
-    stage_start = SteadyClock::now();
     const auto local_clearance_map = buildClearanceMap(planning_context.costmap);
-    timing.local_clearance_ms += elapsed_ms(stage_start);
-    stage_start = SteadyClock::now();
     result.path = buildOptimizedPathFromReference(
       planning_context,
       local_clearance_map,
       start,
       result.effective_goal,
       frame_id);
-    timing.optimize_path_ms += elapsed_ms(stage_start);
     if (!result.path.poses.empty()) {
-      timing.total_ms = elapsed_ms(total_start);
-      if (config_.debug_timing) {
-        result.timing = timing;
-      }
       return result;
     }
   }
 
   std::vector<GridCell> goal_candidates;
-  stage_start = SteadyClock::now();
   const auto nearby_candidates = buildGoalCandidates(
     costmap, clearance_map, goal_mx, goal_my);
-  timing.goal_candidates_ms += elapsed_ms(stage_start);
   for (const auto & candidate : nearby_candidates) {
     if (candidate.mx == goal_mx && candidate.my == goal_my) {
       continue;
@@ -1560,7 +1399,6 @@ RouteClearancePlanResult RouteClearancePlannerCore::createPlan(
   double best_score = std::numeric_limits<double>::infinity();
   PlanningContext best_context;
   std::vector<double> best_clearance_map;
-  stage_start = SteadyClock::now();
   for (const auto & candidate : goal_candidates) {
     geometry_msgs::msg::PoseStamped candidate_goal = goal;
     costmap.mapToWorld(
@@ -1570,30 +1408,20 @@ RouteClearancePlanResult RouteClearancePlannerCore::createPlan(
       candidate_goal.pose.position.y);
 
     std::vector<std::pair<double, double>> reference_points;
-    const auto direct_check_start = SteadyClock::now();
-    const bool direct_segment_safe =
-      isSegmentClearanceSafe(costmap, clearance_map, start, candidate_goal);
-    timing.direct_segment_check_ms += elapsed_ms(direct_check_start);
-    if (direct_segment_safe) {
+    if (isSegmentClearanceSafe(costmap, clearance_map, start, candidate_goal)) {
       reference_points = {
         {start.pose.position.x, start.pose.position.y},
         {candidate_goal.pose.position.x, candidate_goal.pose.position.y}};
     } else {
-      const auto reference_start = SteadyClock::now();
       reference_points = buildReferencePathPoints(
         costmap,
         clearance_map,
         start,
         candidate_goal);
-      timing.reference_path_ms += elapsed_ms(reference_start);
     }
-    const auto context_start = SteadyClock::now();
     auto candidate_context = buildPlanningContext(
       costmap, reference_points, start, candidate_goal);
-    timing.planning_context_ms += elapsed_ms(context_start);
-    const auto clearance_start = SteadyClock::now();
     const auto candidate_clearance_map = buildClearanceMap(candidate_context.costmap);
-    timing.local_clearance_ms += elapsed_ms(clearance_start);
     const double goal_distance = gridDistance(
       candidate.mx,
       candidate.my,
@@ -1608,7 +1436,6 @@ RouteClearancePlanResult RouteClearancePlannerCore::createPlan(
       best_clearance_map = candidate_clearance_map;
     }
   }
-  timing.adjusted_goal_scan_ms += elapsed_ms(stage_start);
 
   if (best_clearance_map.empty()) {
     throw nav2_core::PlannerException("route clearance planner could not find a path");
@@ -1622,18 +1449,12 @@ RouteClearancePlanResult RouteClearancePlannerCore::createPlan(
     result.effective_goal.pose.position.y);
   result.effective_goal.pose.position.z = goal.pose.position.z;
   result.effective_goal.pose.orientation = goal.pose.orientation;
-  stage_start = SteadyClock::now();
   result.path = buildOptimizedPathFromReference(
     best_context,
     best_clearance_map,
     start,
     result.effective_goal,
     frame_id);
-  timing.optimize_path_ms += elapsed_ms(stage_start);
-  timing.total_ms = elapsed_ms(total_start);
-  if (config_.debug_timing) {
-    result.timing = timing;
-  }
   return result;
 }
 

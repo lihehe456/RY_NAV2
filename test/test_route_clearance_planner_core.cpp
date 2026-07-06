@@ -67,6 +67,21 @@ double normalizeAngle(double angle)
   return angle;
 }
 
+double meanInteriorY(const nav_msgs::msg::Path & path)
+{
+  if (path.poses.size() <= 2U) {
+    return path.poses.empty() ? 0.0 : path.poses.front().pose.position.y;
+  }
+
+  double sum = 0.0;
+  size_t count = 0;
+  for (size_t index = 1; index + 1 < path.poses.size(); ++index) {
+    sum += path.poses[index].pose.position.y;
+    ++count;
+  }
+  return sum / static_cast<double>(count);
+}
+
 void addVerticalWall(
   nav2_costmap_2d::Costmap2D & costmap,
   unsigned int mx,
@@ -80,21 +95,27 @@ void addVerticalWall(
   }
 }
 
+void addHorizontalWall(
+  nav2_costmap_2d::Costmap2D & costmap,
+  unsigned int my)
+{
+  for (unsigned int mx = 0; mx < costmap.getSizeInCellsX(); ++mx) {
+    costmap.setCost(mx, my, nav2_costmap_2d::LETHAL_OBSTACLE);
+  }
+}
+
 }  // namespace
 
 TEST(RouteClearancePlannerCoreTest, FreeSpaceReturnsNearlyStraightPath)
 {
   auto costmap = makeCostmap();
   nav2_route_polyline_planner::RouteClearancePlannerConfig config;
-  EXPECT_FALSE(config.debug_timing);
-  config.debug_timing = true;
   config.path_interpolation_resolution = 0.2;
   nav2_route_polyline_planner::RouteClearancePlannerCore planner(config);
 
   const auto result = planner.createPlan(
     costmap, makePose(0.25, 0.25), makePose(2.45, 0.25, 1.57), "map");
 
-  EXPECT_GT(result.timing.total_ms, 0.0);
   EXPECT_FALSE(result.adjusted_goal);
   ASSERT_GT(result.path.poses.size(), 2U);
   EXPECT_NEAR(result.path.poses.front().pose.position.x, 0.25, 0.11);
@@ -198,6 +219,75 @@ TEST(RouteClearancePlannerCoreTest, PositiveCenterlineWeightStaysNearShortestPat
   EXPECT_LT(length, straight_distance * 1.2);
 }
 
+TEST(RouteClearancePlannerCoreTest, RightSideBiasSeparatesForwardAndReturnRoutes)
+{
+  auto costmap = makeCostmap(70, 30, 0.1);
+  addHorizontalWall(costmap, 3);
+  addHorizontalWall(costmap, 26);
+
+  nav2_route_polyline_planner::RouteClearancePlannerConfig config;
+  config.hard_min_clearance = 0.20;
+  config.soft_target_clearance = 0.40;
+  config.reference_corridor_half_width = 2.0;
+  config.path_interpolation_resolution = 0.1;
+  config.right_side_bias = true;
+  config.right_side_weight = 8.0;
+  config.right_side_target_clearance = 0.55;
+  config.right_side_probe_distance = 1.5;
+  config.right_side_max_offset = 0.7;
+  nav2_route_polyline_planner::RouteClearancePlannerCore planner(config);
+
+  const auto forward = planner.createPlan(
+    costmap, makePose(0.55, 1.45), makePose(6.25, 1.45), "map");
+  const auto backward = planner.createPlan(
+    costmap, makePose(6.25, 1.45), makePose(0.55, 1.45), "map");
+
+  ASSERT_GT(forward.path.poses.size(), 4U);
+  ASSERT_GT(backward.path.poses.size(), 4U);
+  EXPECT_LT(meanInteriorY(forward.path), 1.20);
+  EXPECT_GT(meanInteriorY(backward.path), 1.70);
+
+  for (const auto & path : {forward.path, backward.path}) {
+    for (const auto & pose : path.poses) {
+      EXPECT_GE(
+        planner.clearanceAt(costmap, pose.pose.position.x, pose.pose.position.y),
+        0.20 - 1e-6);
+    }
+  }
+}
+
+TEST(RouteClearancePlannerCoreTest, LateralChangeWeightKeepsRightBiasPathContinuous)
+{
+  auto costmap = makeCostmap(70, 30, 0.1);
+  addHorizontalWall(costmap, 3);
+  addHorizontalWall(costmap, 26);
+
+  nav2_route_polyline_planner::RouteClearancePlannerConfig config;
+  config.hard_min_clearance = 0.20;
+  config.soft_target_clearance = 0.40;
+  config.reference_corridor_half_width = 2.0;
+  config.path_interpolation_resolution = 0.1;
+  config.right_side_bias = true;
+  config.right_side_weight = 8.0;
+  config.right_side_target_clearance = 0.55;
+  config.right_side_probe_distance = 1.5;
+  config.right_side_max_offset = 0.7;
+  config.lateral_change_weight = 4.0;
+  config.lateral_smoothing_passes = 2;
+  nav2_route_polyline_planner::RouteClearancePlannerCore planner(config);
+
+  const auto result = planner.createPlan(
+    costmap, makePose(0.55, 1.45), makePose(6.25, 1.45), "map");
+
+  ASSERT_GT(result.path.poses.size(), 4U);
+  EXPECT_LT(meanInteriorY(result.path), 1.20);
+  for (const auto & pose : result.path.poses) {
+    EXPECT_GE(
+      planner.clearanceAt(costmap, pose.pose.position.x, pose.pose.position.y),
+      0.20 - 1e-6);
+  }
+}
+
 TEST(RouteClearancePlannerCoreTest, ReferenceCorridorAvoidsFarObstacleField)
 {
   auto costmap = makeCostmap(120, 80, 0.1);
@@ -235,7 +325,6 @@ TEST(RouteClearancePlannerCoreTest, ReferenceCorridorCanExpandWhenStraightTubeFa
   config.hard_min_clearance = 0.20;
   config.soft_target_clearance = 0.50;
   config.reference_corridor_half_width = 0.8;
-  config.reference_search_margin = 0.3;
   config.path_interpolation_resolution = 0.1;
   nav2_route_polyline_planner::RouteClearancePlannerCore planner(config);
 
@@ -378,32 +467,4 @@ TEST(RouteClearancePlannerCoreTest, IntermediateOrientationsFollowPathTangent)
     const double actual_yaw = yawFromQuaternion(result.path.poses[index].pose.orientation);
     EXPECT_NEAR(normalizeAngle(actual_yaw - expected_yaw), 0.0, 1.0e-5);
   }
-}
-
-TEST(RouteClearancePlannerCoreTest, ReusesGlobalClearanceMapUntilCostmapChanges)
-{
-  auto costmap = makeCostmap(60, 30, 0.1);
-
-  nav2_route_polyline_planner::RouteClearancePlannerConfig config;
-  config.debug_timing = true;
-  config.hard_min_clearance = 0.20;
-  config.soft_target_clearance = 0.50;
-  config.path_interpolation_resolution = 0.2;
-  nav2_route_polyline_planner::RouteClearancePlannerCore planner(config);
-
-  planner.createPlan(costmap, makePose(0.35, 1.45), makePose(2.55, 1.45), "map");
-  const auto first_stats = planner.clearanceCacheStats();
-  EXPECT_EQ(first_stats.builds, 1U);
-  EXPECT_EQ(first_stats.hits, 0U);
-
-  planner.createPlan(costmap, makePose(2.55, 1.45), makePose(5.35, 1.45), "map");
-  const auto second_stats = planner.clearanceCacheStats();
-  EXPECT_EQ(second_stats.builds, 1U);
-  EXPECT_EQ(second_stats.hits, 1U);
-
-  costmap.setCost(30, 15, nav2_costmap_2d::LETHAL_OBSTACLE);
-  planner.createPlan(costmap, makePose(0.35, 0.55), makePose(2.55, 0.55), "map");
-  const auto changed_stats = planner.clearanceCacheStats();
-  EXPECT_EQ(changed_stats.builds, 2U);
-  EXPECT_EQ(changed_stats.hits, 1U);
 }
