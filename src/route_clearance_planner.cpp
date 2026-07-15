@@ -86,6 +86,18 @@ void RouteClearancePlanner::configure(
   declare_parameter_if_not_declared(
     node, name_ + ".right_side_max_offset", rclcpp::ParameterValue(0.8));
   declare_parameter_if_not_declared(
+    node, name_ + ".lateral_preference", rclcpp::ParameterValue(""));
+  declare_parameter_if_not_declared(
+    node, name_ + ".lateral_preference_offset", rclcpp::ParameterValue(0.0));
+  declare_parameter_if_not_declared(
+    node, name_ + ".lateral_preference_weight", rclcpp::ParameterValue(0.0));
+  declare_parameter_if_not_declared(
+    node, name_ + ".pose_directed_crop_enabled", rclcpp::ParameterValue(false));
+  declare_parameter_if_not_declared(
+    node, name_ + ".goal_approach_length", rclcpp::ParameterValue(1.0));
+  declare_parameter_if_not_declared(
+    node, name_ + ".pose_directed_max_corridor_half_width", rclcpp::ParameterValue(0.0));
+  declare_parameter_if_not_declared(
     node, name_ + ".goal_search_radius", rclcpp::ParameterValue(1.0));
   declare_parameter_if_not_declared(
     node, name_ + ".reference_corridor_half_width", rclcpp::ParameterValue(2.0));
@@ -99,6 +111,8 @@ void RouteClearancePlanner::configure(
     node, name_ + ".max_goal_candidates", rclcpp::ParameterValue(80));
   declare_parameter_if_not_declared(
     node, name_ + ".path_interpolation_resolution", rclcpp::ParameterValue(0.0));
+  declare_parameter_if_not_declared(
+    node, name_ + ".output_path_resolution", rclcpp::ParameterValue(0.0));
   declare_parameter_if_not_declared(
     node, name_ + ".use_final_goal_orientation", rclcpp::ParameterValue(true));
 
@@ -121,6 +135,30 @@ void RouteClearancePlanner::configure(
     name_ + ".right_side_probe_distance",
     config.right_side_probe_distance);
   node->get_parameter(name_ + ".right_side_max_offset", config.right_side_max_offset);
+  std::string lateral_preference;
+  double lateral_preference_offset = 0.0;
+  double lateral_preference_weight = 0.0;
+  node->get_parameter(name_ + ".lateral_preference", lateral_preference);
+  node->get_parameter(name_ + ".lateral_preference_offset", lateral_preference_offset);
+  node->get_parameter(name_ + ".lateral_preference_weight", lateral_preference_weight);
+  if (lateral_preference == "right") {
+    config.right_side_bias = true;
+    if (lateral_preference_weight > 0.0 && config.right_side_weight <= 0.0) {
+      config.right_side_weight = lateral_preference_weight;
+    }
+    if (lateral_preference_offset > 0.0) {
+      config.right_side_max_offset = lateral_preference_offset;
+    }
+  }
+  node->get_parameter(
+    name_ + ".pose_directed_crop_enabled",
+    config.pose_directed_crop_enabled);
+  node->get_parameter(
+    name_ + ".goal_approach_length",
+    config.goal_approach_length);
+  node->get_parameter(
+    name_ + ".pose_directed_max_corridor_half_width",
+    config.pose_directed_max_corridor_half_width);
   node->get_parameter(name_ + ".goal_search_radius", config.goal_search_radius);
   node->get_parameter(
     name_ + ".reference_corridor_half_width",
@@ -136,6 +174,9 @@ void RouteClearancePlanner::configure(
   node->get_parameter(
     name_ + ".path_interpolation_resolution",
     config.path_interpolation_resolution);
+  node->get_parameter(
+    name_ + ".output_path_resolution",
+    config.output_path_resolution);
   node->get_parameter(
     name_ + ".use_final_goal_orientation",
     config.use_final_goal_orientation);

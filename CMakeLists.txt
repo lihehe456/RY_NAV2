@@ -39,6 +39,7 @@ set(dependencies
 )
 
 add_library(${library_name} SHARED
+  src/route_clearance_narrow_planner.cpp
   src/route_clearance_planner.cpp
   src/route_clearance_planner_core.cpp
   src/route_polyline_planner.cpp
@@ -89,6 +90,12 @@ if(BUILD_TESTING)
   )
   ament_target_dependencies(test_route_clearance_planner_core ${dependencies})
   target_link_libraries(test_route_clearance_planner_core ${library_name})
+
+  ament_add_gtest(test_planner_plugin_registration
+    test/test_planner_plugin_registration.cpp
+  )
+  ament_target_dependencies(test_planner_plugin_registration ${dependencies})
+  target_link_libraries(test_planner_plugin_registration ${library_name})
 endif()
 
 ament_export_include_directories(include)

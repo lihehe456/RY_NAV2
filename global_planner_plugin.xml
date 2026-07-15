@@ -6,6 +6,12 @@
     <description>NavToPose planner that prefers straight paths while keeping adaptive clearance from global costmap obstacles.</description>
   </class>
   <class
+    name="nav2_route_polyline_planner/RouteClearanceNarrowPlanner"
+    type="nav2_route_polyline_planner::RouteClearanceNarrowPlanner"
+    base_class_type="nav2_core::GlobalPlanner">
+    <description>Narrow-corridor RouteClearance planner with centerline-first defaults and isolated smoothing behavior.</description>
+  </class>
+  <class
     name="nav2_route_polyline_planner/RoutePolylinePlanner"
     type="nav2_route_polyline_planner::RoutePolylinePlanner"
     base_class_type="nav2_core::GlobalPlanner">
