@@ -301,6 +301,40 @@ TEST(RouteClearancePlannerCoreTest, PositiveCenterlineWeightStaysNearShortestPat
   EXPECT_LT(length, straight_distance * 1.2);
 }
 
+TEST(RouteClearancePlannerCoreTest, LongShortcutPathIsSmoothedAfterShortcutting)
+{
+  auto costmap = makeCostmap(520, 160, 0.1);
+  for (unsigned int my = 0; my < costmap.getSizeInCellsY(); ++my) {
+    if (my >= 110 && my <= 125) {
+      continue;
+    }
+    costmap.setCost(250, my, nav2_costmap_2d::LETHAL_OBSTACLE);
+  }
+
+  nav2_route_polyline_planner::RouteClearancePlannerConfig config;
+  config.hard_min_clearance = 0.20;
+  config.soft_target_clearance = 0.50;
+  config.centerline_weight = 2.0;
+  config.reference_corridor_half_width = 8.0;
+  config.path_interpolation_resolution = 0.1;
+  config.right_side_bias = true;
+  config.right_side_weight = 0.0;
+  config.right_side_max_offset = 0.0;
+  config.lateral_smoothing_passes = 6;
+  nav2_route_polyline_planner::RouteClearancePlannerCore planner(config);
+
+  const auto result = planner.createPlan(
+    costmap, makePose(0.55, 4.05), makePose(50.55, 4.05), "map");
+
+  ASSERT_GT(result.path.poses.size(), 20U);
+  EXPECT_LT(maxTurnDegrees(result.path), 25.0);
+  for (const auto & pose : result.path.poses) {
+    EXPECT_GE(
+      planner.clearanceAt(costmap, pose.pose.position.x, pose.pose.position.y),
+      config.hard_min_clearance - 1e-6);
+  }
+}
+
 TEST(RouteClearancePlannerCoreTest, RightSideBiasSeparatesForwardAndReturnRoutes)
 {
   auto costmap = makeCostmap(70, 30, 0.1);

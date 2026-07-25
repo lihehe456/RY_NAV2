@@ -19,7 +19,7 @@
 
 #include "nav2_core/exceptions.hpp"
 #include "nav2_core/global_planner.hpp"
-#include "nav2_route_polyline_planner/route_clearance_planner_core.hpp"
+#include "nav2_route_polyline_planner/route_narrow_planner_core.hpp"
 #include "nav2_util/lifecycle_node.hpp"
 #include "nav2_util/node_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
@@ -63,27 +63,27 @@ public:
     declare_parameter_if_not_declared(
       node, name_ + ".allow_unknown", rclcpp::ParameterValue(false));
     declare_parameter_if_not_declared(
-      node, name_ + ".hard_min_clearance", rclcpp::ParameterValue(0.10));
+      node, name_ + ".hard_min_clearance", rclcpp::ParameterValue(0.40));
     declare_parameter_if_not_declared(
-      node, name_ + ".soft_target_clearance", rclcpp::ParameterValue(0.35));
+      node, name_ + ".soft_target_clearance", rclcpp::ParameterValue(0.70));
     declare_parameter_if_not_declared(
-      node, name_ + ".clearance_weight", rclcpp::ParameterValue(5.0));
+      node, name_ + ".clearance_weight", rclcpp::ParameterValue(18.0));
     declare_parameter_if_not_declared(
-      node, name_ + ".centerline_weight", rclcpp::ParameterValue(8.0));
+      node, name_ + ".centerline_weight", rclcpp::ParameterValue(0.08));
     declare_parameter_if_not_declared(
-      node, name_ + ".cost_weight", rclcpp::ParameterValue(1.0));
+      node, name_ + ".cost_weight", rclcpp::ParameterValue(3.0));
     declare_parameter_if_not_declared(
-      node, name_ + ".turn_weight", rclcpp::ParameterValue(3.0));
+      node, name_ + ".turn_weight", rclcpp::ParameterValue(2.0));
     declare_parameter_if_not_declared(
-      node, name_ + ".lateral_change_weight", rclcpp::ParameterValue(20.0));
+      node, name_ + ".lateral_change_weight", rclcpp::ParameterValue(10.0));
     declare_parameter_if_not_declared(
-      node, name_ + ".lateral_smoothing_passes", rclcpp::ParameterValue(8));
+      node, name_ + ".lateral_smoothing_passes", rclcpp::ParameterValue(24));
     declare_parameter_if_not_declared(
       node, name_ + ".right_side_bias", rclcpp::ParameterValue(false));
     declare_parameter_if_not_declared(
       node, name_ + ".right_side_weight", rclcpp::ParameterValue(0.0));
     declare_parameter_if_not_declared(
-      node, name_ + ".right_side_target_clearance", rclcpp::ParameterValue(0.35));
+      node, name_ + ".right_side_target_clearance", rclcpp::ParameterValue(0.55));
     declare_parameter_if_not_declared(
       node, name_ + ".right_side_probe_distance", rclcpp::ParameterValue(0.8));
     declare_parameter_if_not_declared(
@@ -97,7 +97,7 @@ public:
     declare_parameter_if_not_declared(
       node, name_ + ".goal_search_radius", rclcpp::ParameterValue(1.2));
     declare_parameter_if_not_declared(
-      node, name_ + ".reference_corridor_half_width", rclcpp::ParameterValue(1.2));
+      node, name_ + ".reference_corridor_half_width", rclcpp::ParameterValue(2.0));
     declare_parameter_if_not_declared(
       node, name_ + ".reference_use_astar", rclcpp::ParameterValue(false));
     declare_parameter_if_not_declared(
@@ -107,49 +107,35 @@ public:
     declare_parameter_if_not_declared(
       node, name_ + ".max_goal_candidates", rclcpp::ParameterValue(90));
     declare_parameter_if_not_declared(
-      node, name_ + ".path_interpolation_resolution", rclcpp::ParameterValue(0.05));
+      node, name_ + ".path_interpolation_resolution", rclcpp::ParameterValue(0.10));
     declare_parameter_if_not_declared(
       node, name_ + ".output_path_resolution", rclcpp::ParameterValue(0.05));
     declare_parameter_if_not_declared(
       node, name_ + ".use_final_goal_orientation", rclcpp::ParameterValue(true));
 
-    RouteClearancePlannerConfig config;
+    RouteNarrowPlannerConfig config;
+    double centerline_weight = 0.0;
     node->get_parameter(name_ + ".allow_unknown", config.allow_unknown);
     node->get_parameter(name_ + ".hard_min_clearance", config.hard_min_clearance);
     node->get_parameter(name_ + ".soft_target_clearance", config.soft_target_clearance);
     node->get_parameter(name_ + ".clearance_weight", config.clearance_weight);
-    node->get_parameter(name_ + ".centerline_weight", config.centerline_weight);
+    node->get_parameter(name_ + ".centerline_weight", centerline_weight);
+    config.reference_weight = centerline_weight;
     node->get_parameter(name_ + ".cost_weight", config.cost_weight);
     node->get_parameter(name_ + ".turn_weight", config.turn_weight);
     node->get_parameter(name_ + ".lateral_change_weight", config.lateral_change_weight);
-    node->get_parameter(name_ + ".lateral_smoothing_passes", config.lateral_smoothing_passes);
-    node->get_parameter(name_ + ".right_side_bias", config.right_side_bias);
-    node->get_parameter(name_ + ".right_side_weight", config.right_side_weight);
-    node->get_parameter(name_ + ".right_side_max_offset", config.right_side_max_offset);
-    node->get_parameter(name_ + ".right_side_target_clearance", config.right_side_target_clearance);
-    node->get_parameter(name_ + ".right_side_probe_distance", config.right_side_probe_distance);
-    node->get_parameter(name_ + ".goal_search_radius", config.goal_search_radius);
+    node->get_parameter(name_ + ".lateral_smoothing_passes", config.smoothing_passes);
     node->get_parameter(
       name_ + ".reference_corridor_half_width",
-      config.reference_corridor_half_width);
-    node->get_parameter(name_ + ".reference_use_astar", config.reference_use_astar);
-    node->get_parameter(name_ + ".reference_allow_unknown", config.reference_allow_unknown);
+      config.corridor_half_width);
     node->get_parameter(name_ + ".start_goal_keepout_radius", config.start_goal_keepout_radius);
-    node->get_parameter(name_ + ".max_goal_candidates", config.max_goal_candidates);
     node->get_parameter(
       name_ + ".path_interpolation_resolution",
       config.path_interpolation_resolution);
     node->get_parameter(name_ + ".output_path_resolution", config.output_path_resolution);
     node->get_parameter(name_ + ".use_final_goal_orientation", config.use_final_goal_orientation);
-    node->get_parameter(
-      name_ + ".pose_directed_crop_enabled",
-      config.pose_directed_crop_enabled);
-    node->get_parameter(name_ + ".goal_approach_length", config.goal_approach_length);
-    node->get_parameter(
-      name_ + ".pose_directed_max_corridor_half_width",
-      config.pose_directed_max_corridor_half_width);
 
-    core_ = std::make_unique<RouteClearancePlannerCore>(config);
+    core_ = std::make_unique<RouteNarrowPlannerCore>(config);
     RCLCPP_INFO(
       logger_,
       "Configuring plugin %s of type RouteClearanceNarrowPlanner",
@@ -201,15 +187,15 @@ public:
     }
 
     std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap_->getMutex()));
-    auto result = core_->createPlan(*costmap_, start, goal, global_frame_);
+    auto path = core_->createPlan(*costmap_, start, goal, global_frame_);
     lock.unlock();
 
-    result.path.header.stamp = clock_->now();
-    result.path.header.frame_id = global_frame_;
-    for (auto & pose : result.path.poses) {
-      pose.header = result.path.header;
+    path.header.stamp = clock_->now();
+    path.header.frame_id = global_frame_;
+    for (auto & pose : path.poses) {
+      pose.header = path.header;
     }
-    return result.path;
+    return path;
   }
 
 private:
@@ -221,7 +207,7 @@ private:
   nav2_costmap_2d::Costmap2D * costmap_{nullptr};
   std::string global_frame_;
   std::string name_;
-  std::unique_ptr<RouteClearancePlannerCore> core_;
+  std::unique_ptr<RouteNarrowPlannerCore> core_;
 };
 
 }  // namespace nav2_route_polyline_planner

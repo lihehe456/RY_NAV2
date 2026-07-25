@@ -1445,6 +1445,51 @@ nav_msgs::msg::Path RouteClearancePlannerCore::buildOptimizedPathFromReference(
       }
       return build_path_from_points(shortcut_points);
     };
+  auto smooth_shortcut_path_if_safe =
+    [&](const nav_msgs::msg::Path & path) -> nav_msgs::msg::Path {
+      const int smoothing_passes = std::clamp(config_.lateral_smoothing_passes, 0, 8);
+      if (smoothing_passes == 0 || path.poses.size() < 4U) {
+        return path;
+      }
+
+      std::vector<std::pair<double, double>> points;
+      points.reserve(path.poses.size());
+      for (const auto & pose : path.poses) {
+        points.push_back({pose.pose.position.x, pose.pose.position.y});
+      }
+
+      constexpr double smoothing_alpha = 0.50;
+      for (int pass = 0; pass < smoothing_passes; ++pass) {
+        auto smoothed = points;
+        for (size_t index = 1; index + 1 < points.size(); ++index) {
+          const auto & previous = points[index - 1];
+          const auto & current = points[index];
+          const auto & next = points[index + 1];
+          const std::pair<double, double> midpoint{
+            (previous.first + next.first) * 0.5,
+            (previous.second + next.second) * 0.5};
+          const std::pair<double, double> candidate{
+            current.first * (1.0 - smoothing_alpha) + midpoint.first * smoothing_alpha,
+            current.second * (1.0 - smoothing_alpha) + midpoint.second * smoothing_alpha};
+
+          unsigned int mx = 0;
+          unsigned int my = 0;
+          if (!planning_context.costmap.worldToMap(candidate.first, candidate.second, mx, my)) {
+            continue;
+          }
+          if (!isCellTraversable(planning_context.costmap, clearance_map, mx, my)) {
+            continue;
+          }
+          if (!segment_is_valid(previous, candidate) || !segment_is_valid(candidate, next)) {
+            continue;
+          }
+          smoothed[index] = candidate;
+        }
+        points = std::move(smoothed);
+      }
+
+      return build_path_from_points(points);
+    };
 
   auto right_side_score =
     [&](const std::pair<double, double> & point,
@@ -1681,6 +1726,7 @@ nav_msgs::msg::Path RouteClearancePlannerCore::buildOptimizedPathFromReference(
     planning_context.costmap,
     clearance_map);
   optimized_path = shortcut_path_if_safe(optimized_path);
+  optimized_path = smooth_shortcut_path_if_safe(optimized_path);
   if (path_respects_hard_clearance(optimized_path)) {
     return downsampleOutputPath(optimized_path, start, effective_goal);
   }
