@@ -10,6 +10,7 @@ find_package(nav2_core REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(nav2_navfn_planner REQUIRED)
 find_package(nav2_util REQUIRED)
+find_package(nav2_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -31,6 +32,7 @@ set(dependencies
   nav2_costmap_2d
   nav2_navfn_planner
   nav2_util
+  nav2_msgs
   nav_msgs
   pluginlib
   rclcpp
@@ -39,6 +41,7 @@ set(dependencies
 )
 
 add_library(${library_name} SHARED
+  src/local_costmap_overlay.cpp
   src/route_clearance_narrow_planner.cpp
   src/route_clearance_planner.cpp
   src/route_clearance_planner_core.cpp
@@ -91,6 +94,12 @@ if(BUILD_TESTING)
   )
   ament_target_dependencies(test_route_clearance_planner_core ${dependencies})
   target_link_libraries(test_route_clearance_planner_core ${library_name})
+
+  ament_add_gtest(test_local_costmap_overlay
+    test/test_local_costmap_overlay.cpp
+  )
+  ament_target_dependencies(test_local_costmap_overlay ${dependencies})
+  target_link_libraries(test_local_costmap_overlay ${library_name})
 
   ament_add_gtest(test_route_narrow_planner_core
     test/test_route_narrow_planner_core.cpp

@@ -16,9 +16,12 @@
 #define NAV2_ROUTE_POLYLINE_PLANNER__ROUTE_CLEARANCE_PLANNER_HPP_
 
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "nav2_core/global_planner.hpp"
+#include "nav2_msgs/msg/costmap.hpp"
+#include "nav2_route_polyline_planner/local_costmap_overlay.hpp"
 #include "nav2_route_polyline_planner/route_clearance_planner_core.hpp"
 #include "nav2_util/lifecycle_node.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -47,6 +50,8 @@ public:
     const geometry_msgs::msg::PoseStamped & goal) override;
 
 private:
+  void localCostmapCallback(nav2_msgs::msg::Costmap::SharedPtr msg);
+
   rclcpp_lifecycle::LifecycleNode::WeakPtr node_;
   rclcpp::Clock::SharedPtr clock_;
   rclcpp::Logger logger_{rclcpp::get_logger("RouteClearancePlanner")};
@@ -56,6 +61,17 @@ private:
   std::string global_frame_;
   std::string name_;
   std::unique_ptr<RouteClearancePlannerCore> core_;
+
+  bool use_local_costmap_overlay_{false};
+  std::string local_costmap_topic_{"/local_costmap/costmap_raw"};
+  double local_costmap_max_age_sec_{0.8};
+  double local_costmap_tf_timeout_sec_{0.05};
+  std::string local_costmap_stale_policy_{"ignore"};
+  LocalCostmapOverlayOptions local_costmap_overlay_options_;
+  rclcpp::Subscription<nav2_msgs::msg::Costmap>::SharedPtr local_costmap_sub_;
+  std::mutex local_costmap_mutex_;
+  nav2_msgs::msg::Costmap::SharedPtr latest_local_costmap_;
+  rclcpp::Time latest_local_costmap_receive_time_;
 };
 
 }  // namespace nav2_route_polyline_planner

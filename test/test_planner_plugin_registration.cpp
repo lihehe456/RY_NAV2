@@ -29,3 +29,15 @@ TEST(PlannerPluginRegistrationTest, LoadsRouteClearanceNarrowPlanner)
 
   ASSERT_NE(planner, nullptr);
 }
+
+TEST(PlannerPluginRegistrationTest, LoadsRouteClearancePlanner)
+{
+  pluginlib::ClassLoader<nav2_core::GlobalPlanner> loader(
+    "nav2_core",
+    "nav2_core::GlobalPlanner");
+
+  const auto planner = loader.createSharedInstance(
+    "nav2_route_polyline_planner/RouteClearancePlanner");
+
+  ASSERT_NE(planner, nullptr);
+}
